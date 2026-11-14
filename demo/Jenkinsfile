@@ -4,10 +4,10 @@ pipeline {
 
     environment {
         APP_NAME = 'DisPr'
-        IMAGE_NAME = 'DisPr'
+        IMAGE_NAME = 'dispr'
 
-        CONTAINER_PORT = '8080'
         HOST_PORT = '8081'
+        CONTAINER_PORT = '8080'
 
         HEALTH_URL = 'http://127.0.0.1:8081/hit/check'
     }
@@ -16,7 +16,6 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                echo 'Checking out source code...'
                 checkout scm
             }
         }
@@ -24,52 +23,49 @@ pipeline {
         stage('Validate Branch') {
             steps {
                 script {
-                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH
+                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH ?: ''
+
+                    branch = branch.replaceFirst(/^origin\//, '')
 
                     if (branch != 'master' &&
-                        branch != 'origin/master' &&
                         branch != 'refs/heads/master') {
-
-                        error('This is not a Master Branch')
+                        error('Only master branch deployment is allowed!')
                     }
 
-                    echo "Deploying from branch: ${branch}"
+                    echo "Deploying branch: ${branch}"
                 }
             }
         }
 
         stage('Build and Test') {
             steps {
-                echo 'Building Spring Boot application...'
-                sh 'mvn clean verify'
+                dir('demo') {
+                    sh 'chmod +x mvnw'
+                    sh './mvnw -B clean verify'
+                }
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                echo 'Building Docker image for the DisPr'
-
-                sh '''
-                    docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
-                    docker tag ${IMAGE_NAME}:${BUILD_NUMBER} ${IMAGE_NAME}:latest
-                '''
+                dir('demo') {
+                    sh '''
+                        docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
+                    '''
+                }
             }
         }
 
         stage('Stop Old Container') {
             steps {
-                echo 'Stopping previous application container...'
-
                 sh '''
                     docker rm -f ${APP_NAME} || true
                 '''
             }
         }
 
-        stage('Deploy') {
+        stage('Deploy Application') {
             steps {
-                echo 'Deploying application to EC2...'
-
                 sh '''
                     docker run -d \
                         --name ${APP_NAME} \
@@ -80,7 +76,7 @@ pipeline {
             }
         }
 
-        stage('Health Check') {
+        stage('Application Health Check') {
             steps {
                 script {
                     boolean healthy = false
@@ -98,19 +94,17 @@ pipeline {
 
                         if (status == '200') {
                             healthy = true
-                            echo 'Application is running successfully!'
+                            echo 'Application is UP!'
                             break
                         }
 
-                        echo "Waiting for application... Attempt ${attempt}/18"
-
+                        echo "Waiting for application... ${attempt}/18"
                         sleep(time: 5, unit: 'SECONDS')
                     }
 
                     if (!healthy) {
                         sh 'docker logs ${APP_NAME} || true'
-
-                        error('Application health check failed!')
+                        error('Application health check FAILED!')
                     }
                 }
             }
@@ -118,23 +112,21 @@ pipeline {
     }
 
     post {
-
         success {
-            echo '======================================'
+            echo '================================'
             echo 'DEPLOYMENT SUCCESSFUL!'
-            echo 'Application is healthy.'
-            echo '======================================'
+            echo 'Application is running!'
+            echo '================================'
         }
 
         failure {
-            echo '======================================'
+            echo '================================'
             echo 'DEPLOYMENT FAILED!'
-            echo 'Please check Jenkins console output.'
-            echo '======================================'
+            echo 'Check Jenkins console output.'
+            echo '================================'
         }
 
         always {
-            echo 'Docker container status:'
             sh 'docker ps -a'
         }
     }
