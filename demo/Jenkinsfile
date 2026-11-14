@@ -1,0 +1,141 @@
+
+pipeline {
+    agent any
+
+    environment {
+        APP_NAME = 'DisPr'
+        IMAGE_NAME = 'DisPr'
+
+        CONTAINER_PORT = '8080'
+        HOST_PORT = '8081'
+
+        HEALTH_URL = 'http://127.0.0.1:8081/hit/check'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                echo 'Checking out source code...'
+                checkout scm
+            }
+        }
+
+        stage('Validate Branch') {
+            steps {
+                script {
+                    def branch = env.BRANCH_NAME ?: env.GIT_BRANCH
+
+                    if (branch != 'master' &&
+                        branch != 'origin/master' &&
+                        branch != 'refs/heads/master') {
+
+                        error('This is not a Master Branch')
+                    }
+
+                    echo "Deploying from branch: ${branch}"
+                }
+            }
+        }
+
+        stage('Build and Test') {
+            steps {
+                echo 'Building Spring Boot application...'
+                sh 'mvn clean verify'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                echo 'Building Docker image for the DisPr'
+
+                sh '''
+                    docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} .
+                    docker tag ${IMAGE_NAME}:${BUILD_NUMBER} ${IMAGE_NAME}:latest
+                '''
+            }
+        }
+
+        stage('Stop Old Container') {
+            steps {
+                echo 'Stopping previous application container...'
+
+                sh '''
+                    docker rm -f ${APP_NAME} || true
+                '''
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                echo 'Deploying application to EC2...'
+
+                sh '''
+                    docker run -d \
+                        --name ${APP_NAME} \
+                        --restart unless-stopped \
+                        -p ${HOST_PORT}:${CONTAINER_PORT} \
+                        ${IMAGE_NAME}:${BUILD_NUMBER}
+                '''
+            }
+        }
+
+        stage('Health Check') {
+            steps {
+                script {
+                    boolean healthy = false
+
+                    for (int attempt = 1; attempt <= 18; attempt++) {
+
+                        def status = sh(
+                            script: """
+                                curl -s -o /dev/null \
+                                -w '%{http_code}' \
+                                ${HEALTH_URL}
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        if (status == '200') {
+                            healthy = true
+                            echo 'Application is running successfully!'
+                            break
+                        }
+
+                        echo "Waiting for application... Attempt ${attempt}/18"
+
+                        sleep(time: 5, unit: 'SECONDS')
+                    }
+
+                    if (!healthy) {
+                        sh 'docker logs ${APP_NAME} || true'
+
+                        error('Application health check failed!')
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo '======================================'
+            echo 'DEPLOYMENT SUCCESSFUL!'
+            echo 'Application is healthy.'
+            echo '======================================'
+        }
+
+        failure {
+            echo '======================================'
+            echo 'DEPLOYMENT FAILED!'
+            echo 'Please check Jenkins console output.'
+            echo '======================================'
+        }
+
+        always {
+            echo 'Docker container status:'
+            sh 'docker ps -a'
+        }
+    }
+}
