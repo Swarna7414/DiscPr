@@ -1,0 +1,117 @@
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+    }
+
+    environment {
+        AWS_REGION = 'us-east-2'
+        ECR_REGISTRY = '904855444556.dkr.ecr.us-east-2.amazonaws.com'
+        ECR_REPOSITORY = 'discover'
+        IMAGE_TAG = 'latest'
+        CONTAINER_NAME = 'discpr'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+                echo 'Source code checked out successfully.'
+            }
+        }
+
+        stage('Build and Test') {
+            steps {
+                dir('demo') {
+                    sh '''
+                        chmod +x mvnw
+                        ./mvnw clean package
+                    '''
+                }
+            }
+        }
+
+        stage('Prepare JAR') {
+            steps {
+                dir('demo') {
+                    sh '''
+                        JAR_FILE=$(find target -maxdepth 1 \
+                          -type f -name '*.jar' \
+                          ! -name '*.original' | head -n 1)
+
+                        if [ -z "$JAR_FILE" ]; then
+                            echo "Spring Boot JAR not found!"
+                            exit 1
+                        fi
+
+                        cp "$JAR_FILE" app.jar
+                    '''
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                dir('demo') {
+                    sh '''
+                        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+                    '''
+                }
+            }
+        }
+
+        stage('Login to AWS ECR') {
+            steps {
+                sh '''
+                    aws ecr get-login-password --region $AWS_REGION |
+                    docker login --username AWS --password-stdin $ECR_REGISTRY
+                '''
+            }
+        }
+
+        stage('Push Docker Image to ECR') {
+            steps {
+                sh '''
+                    docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+                '''
+            }
+        }
+
+        stage('Deploy on EC2') {
+            steps {
+                sh '''
+                    docker rm -f $CONTAINER_NAME || true
+
+                    docker run -d \
+                        --name $CONTAINER_NAME \
+                        --restart unless-stopped \
+                        -p 8081:8080 \
+                        $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+                    sleep 10
+
+                    docker ps
+                    docker logs --tail 50 $CONTAINER_NAME
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Application successfully deployed on EC2!'
+            echo 'Application URL: http://18.216.124.15:8081'
+        }
+
+        failure {
+            echo 'Pipeline failed. Check Console Output.'
+        }
+
+        always {
+            echo 'Jenkins pipeline execution completed.'
+        }
+    }
+}
