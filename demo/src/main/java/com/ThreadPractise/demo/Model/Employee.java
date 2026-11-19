@@ -1,10 +1,10 @@
 package com.ThreadPractise.demo.Model;
+
 import jakarta.persistence.*;
 import lombok.Data;
 
-
 @Entity
-@Table(name = "Employee")
+@Table(name = "employees")
 @Data
 public class Employee {
 
@@ -14,8 +14,12 @@ public class Employee {
 
     private String name;
 
-    private String department;
+    private Integer age;
 
     private Double salary;
+
+    private String imageKey;
+
+    private String fileKey;
 
 }
